@@ -1,0 +1,58 @@
+name: extractor
+
+services:
+  mongo:
+    container_name: extractor-mongo
+    image: mongo:8
+    # Run mongod directly as root: the image's default `mongodb` user cannot
+    # reopen WiredTiger files on a bind mount with Docker Desktop for Mac.
+    user: "0:0"
+    entrypoint: ["mongod"]
+    # --quiet drops the "Connection accepted/ended" lines that the healthcheck
+    # would otherwise emit every few seconds.
+    command: ["--bind_ip_all", "--quiet"]
+    volumes:
+      - ./mongo_db:/data/db
+    ports:
+      - "127.0.0.1:27017:27017"
+    healthcheck:
+      # Plain TCP connect instead of `mongosh ... ping`: mongod only listens once
+      # it is ready, and a bare connection sends no command, so nothing is logged
+      # (mongosh pings log several lines per check even with --quiet).
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/27017"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    mem_limit: 512m
+    restart: unless-stopped
+
+  backend:
+    container_name: extractor-backend
+    image: extractor-backend
+    build: ./backend
+    env_file: ./backend/.env
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/extractor
+    depends_on:
+      mongo:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    mem_limit: 768m
+    cpus: 1.0
+    restart: unless-stopped
+
+  frontend:
+    container_name: extractor-frontend
+    image: extractor-frontend
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: ${BACKEND_URL:-http://localhost:8000}
+    depends_on:
+      - backend
+    ports:
+      - "5173:5173"
+    mem_limit: 256m
+    cpus: 0.5
+    restart: unless-stopped
